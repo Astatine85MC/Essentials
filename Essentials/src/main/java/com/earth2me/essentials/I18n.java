@@ -72,7 +72,7 @@ public class I18n implements net.ess3.api.II18n {
         if (objects.length == 0) {
             return NODOUBLEMARK.matcher(instance.translate(locale, string)).replaceAll("'");
         } else {
-            return instance.format(string, objects);
+            return instance.format(locale, string, objects);
         }
     }
 
