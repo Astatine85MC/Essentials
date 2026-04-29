@@ -1,10 +1,15 @@
 package com.earth2me.essentials;
 
+import com.earth2me.essentials.utils.DateUtil;
+import org.bukkit.Location;
+import org.bukkit.boss.BarColor;
+import org.bukkit.boss.BarStyle;
+import org.bukkit.boss.BossBar;
+import org.bukkit.event.player.PlayerTeleportEvent.TeleportCause;
+
+import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-
-import org.bukkit.Location;
-import org.bukkit.event.player.PlayerTeleportEvent.TeleportCause;
 
 import net.ess3.api.IEssentials;
 import net.ess3.api.IUser;
@@ -31,6 +36,7 @@ public class AsyncTimedTeleport implements Runnable {
     private final boolean timer_canMove;
     private final Trade timer_chargeFor;
     private final TeleportCause timer_cause;
+    private final BossBar timer_bossBar;
     private int timer_task;
     private double timer_health;
 
@@ -54,8 +60,14 @@ public class AsyncTimedTeleport implements Runnable {
         this.timer_cause = cause;
         this.timer_respawn = respawn;
         this.timer_canMove = user.isAuthorized("essentials.teleport.timer.move");
+        this.timer_bossBar = ess.getServer().createBossBar(getBossBarTitle(teleportUser), getBossBarColor(), BarStyle.SOLID);
+        this.timer_bossBar.addPlayer(teleportUser.getBase());
+        updateBossBar(teleportUser);
 
         timer_task = ess.scheduleSyncRepeatingTaskForEntity(teleportUser.getBase(), this, 20, 20);
+        if (timer_task == -1) {
+            removeBossBar();
+        }
 
         if (future != null) {
             this.parentFuture = future;
@@ -96,6 +108,8 @@ public class AsyncTimedTeleport implements Runnable {
             cancelTimer(true);
             return;
         }
+
+        updateBossBar(teleportUser);
 
         class DelayedTeleportTask implements Runnable {
             @Override
@@ -148,6 +162,7 @@ public class AsyncTimedTeleport implements Runnable {
     //If we need to cancelTimer a pending teleportPlayer call this method
     void cancelTimer(final boolean notifyUser) {
         if (timer_task == -1) {
+            removeBossBar();
             return;
         }
         try {
@@ -167,7 +182,106 @@ public class AsyncTimedTeleport implements Runnable {
                 }
             }
         } finally {
+            removeBossBar();
             timer_task = -1;
+        }
+    }
+
+    private void updateBossBar(final IUser teleportUser) {
+        final long remaining = Math.max(0L, timer_started + timer_delay - System.currentTimeMillis());
+        timer_bossBar.setTitle(getBossBarTitle(teleportUser));
+        timer_bossBar.setProgress(timer_delay <= 0L ? 0D : Math.max(0D, Math.min(1D, (double) remaining / timer_delay)));
+    }
+
+    private String getBossBarTitle(final IUser teleportUser) {
+        final long remaining = Math.max(0L, timer_started + timer_delay - System.currentTimeMillis());
+        return ess.getAdventureFacet().miniToLegacy(teleportUser.playerTl("dontMoveMessage", DateUtil.formatDateDiff(System.currentTimeMillis() + remaining)));
+    }
+
+    private void removeBossBar() {
+        timer_bossBar.removeAll();
+    }
+
+    private BarColor getBossBarColor() {
+        final String color = ess.getSettings().getPrimaryColor();
+        if (color.startsWith("#") && color.length() == 7) {
+            try {
+                return nearestBossBarColor(Integer.parseInt(color.substring(1), 16));
+            } catch (final NumberFormatException ignored) {
+            }
+        }
+
+        switch (color.toLowerCase(Locale.ENGLISH)) {
+            case "dark_blue":
+            case "blue":
+            case "dark_aqua":
+            case "aqua":
+                return BarColor.BLUE;
+            case "dark_green":
+            case "green":
+                return BarColor.GREEN;
+            case "dark_red":
+            case "red":
+                return BarColor.RED;
+            case "dark_purple":
+            case "light_purple":
+                return BarColor.PURPLE;
+            case "gold":
+            case "yellow":
+                return BarColor.YELLOW;
+            case "white":
+            case "gray":
+            case "dark_gray":
+            case "black":
+                return BarColor.WHITE;
+            default:
+                return BarColor.YELLOW;
+        }
+    }
+
+    private BarColor nearestBossBarColor(final int rgb) {
+        final int red = (rgb >> 16) & 0xFF;
+        final int green = (rgb >> 8) & 0xFF;
+        final int blue = rgb & 0xFF;
+
+        BarColor nearest = BarColor.YELLOW;
+        int nearestDistance = Integer.MAX_VALUE;
+        for (final BossBarColor color : BossBarColor.values()) {
+            final int distance = distance(red, green, blue, color.red, color.green, color.blue);
+            if (distance < nearestDistance) {
+                nearest = color.barColor;
+                nearestDistance = distance;
+            }
+        }
+        return nearest;
+    }
+
+    private int distance(final int red, final int green, final int blue, final int targetRed, final int targetGreen, final int targetBlue) {
+        final int redDiff = red - targetRed;
+        final int greenDiff = green - targetGreen;
+        final int blueDiff = blue - targetBlue;
+        return redDiff * redDiff + greenDiff * greenDiff + blueDiff * blueDiff;
+    }
+
+    private enum BossBarColor {
+        PINK(BarColor.PINK, 255, 85, 255),
+        BLUE(BarColor.BLUE, 85, 85, 255),
+        RED(BarColor.RED, 255, 85, 85),
+        GREEN(BarColor.GREEN, 85, 255, 85),
+        YELLOW(BarColor.YELLOW, 255, 255, 85),
+        PURPLE(BarColor.PURPLE, 170, 0, 170),
+        WHITE(BarColor.WHITE, 255, 255, 255);
+
+        private final BarColor barColor;
+        private final int red;
+        private final int green;
+        private final int blue;
+
+        BossBarColor(final BarColor barColor, final int red, final int green, final int blue) {
+            this.barColor = barColor;
+            this.red = red;
+            this.green = green;
+            this.blue = blue;
         }
     }
 }
