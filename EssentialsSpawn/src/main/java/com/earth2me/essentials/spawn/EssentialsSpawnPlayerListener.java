@@ -77,7 +77,8 @@ class EssentialsSpawnPlayerListener implements Listener {
     }
 
     void onPlayerJoin(final PlayerJoinEvent event) {
-        ess.runTaskAsynchronously(() -> delayedJoin(event.getPlayer()));
+        final Player player = event.getPlayer();
+        ess.scheduleSyncDelayedTaskForEntity(player, () -> delayedJoin(player), 0L);
     }
 
     private void delayedJoin(final Player player) {
@@ -88,7 +89,7 @@ class EssentialsSpawnPlayerListener implements Listener {
                 final User user = ess.getUser(player);
 
                 if (ess.getSettings().isUserInSpawnOnJoinGroup(user) && !user.isAuthorized("essentials.spawn-on-join.exempt")) {
-                    ess.scheduleSyncDelayedTask(() -> {
+                    ess.scheduleSyncDelayedTaskForEntity(player, () -> {
                         final Location spawn = spawns.getSpawn(user.getGroup());
                         if (spawn == null) {
                             return;
@@ -111,10 +112,10 @@ class EssentialsSpawnPlayerListener implements Listener {
         final boolean spawnRandomly = tryRandomTeleport(user, ess.getSettings().getRandomSpawnLocation());
 
         if (!spawnRandomly && !"none".equalsIgnoreCase(ess.getSettings().getNewbieSpawn())) {
-            ess.scheduleSyncDelayedTask(new NewPlayerTeleport(user), 1L);
+            ess.scheduleSyncDelayedTaskForEntity(player, new NewPlayerTeleport(user), 1L);
         }
 
-        ess.scheduleSyncDelayedTask(() -> {
+        ess.scheduleSyncDelayedTaskForEntity(player, () -> {
             if (!user.getBase().isOnline()) {
                 return;
             }
@@ -171,9 +172,12 @@ class EssentialsSpawnPlayerListener implements Listener {
         if (!ess.getRandomTeleport().hasLocation(name)) {
             return false;
         }
+        final Player player = user.getBase();
         ess.getRandomTeleport().getRandomLocation(name).thenAccept(location -> {
-            final CompletableFuture<Boolean> future = new CompletableFuture<>();
-            user.getAsyncTeleport().now(location, false, PlayerTeleportEvent.TeleportCause.PLUGIN, future);
+            ess.scheduleSyncDelayedTaskForEntity(player, () -> {
+                final CompletableFuture<Boolean> future = new CompletableFuture<>();
+                user.getAsyncTeleport().now(location, false, PlayerTeleportEvent.TeleportCause.PLUGIN, future);
+            });
         });
         return true;
     }

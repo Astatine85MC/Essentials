@@ -24,6 +24,7 @@ import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.RejectedExecutionException;
 
 public class RandomTeleport implements IConf {
     private static final Random RANDOM = new Random();
@@ -156,7 +157,7 @@ public class RandomTeleport implements IConf {
 
     // Prompts caching random valid locations, up to a maximum number of attempts.
     public void cacheRandomLocations(final String name) {
-        ess.getServer().getScheduler().scheduleSyncDelayedTask(ess, () -> {
+        ess.scheduleSyncDelayedTask(() -> {
             for (int i = 0; i < this.getFindAttempts(); ++i) {
                 calculateRandomLocation(getCenter(name), getMinRange(name), getMaxRange(name)).thenAccept(location -> {
                     if (isValidRandomLocation(location)) {
@@ -215,12 +216,19 @@ public class RandomTeleport implements IConf {
             0
         );
         PaperLib.getChunkAtAsync(location).thenAccept(chunk -> {
-            if (World.Environment.NETHER.equals(center.getWorld().getEnvironment())) {
-                location.setY(getNetherYAt(location));
-            } else {
-                location.setY(center.getWorld().getHighestBlockYAt(location) + HIGHEST_BLOCK_Y_OFFSET);
+            if (ess.scheduleSyncDelayedTaskForLocation(location, () -> {
+                if (World.Environment.NETHER.equals(center.getWorld().getEnvironment())) {
+                    location.setY(getNetherYAt(location));
+                } else {
+                    location.setY(center.getWorld().getHighestBlockYAt(location) + HIGHEST_BLOCK_Y_OFFSET);
+                }
+                future.complete(location);
+            }) == -1) {
+                future.completeExceptionally(new RejectedExecutionException("Target region rejected random teleport calculation"));
             }
-            future.complete(location);
+        }).exceptionally(th -> {
+            future.completeExceptionally(th);
+            return null;
         });
         return future;
     }

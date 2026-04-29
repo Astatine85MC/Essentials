@@ -106,6 +106,7 @@ import net.ess3.provider.providers.PrehistoricPotionMetaProvider;
 import net.essentialsx.api.v2.services.BalanceTop;
 import net.essentialsx.api.v2.services.mail.MailService;
 import org.bukkit.Bukkit;
+import org.bukkit.Location;
 import org.bukkit.Server;
 import org.bukkit.World;
 import org.bukkit.block.Block;
@@ -115,6 +116,7 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.command.PluginCommand;
 import org.bukkit.command.PluginIdentifiableCommand;
 import org.bukkit.command.TabCompleter;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.Cancellable;
 import org.bukkit.event.EventHandler;
@@ -143,6 +145,7 @@ import java.util.Map;
 import java.util.MissingResourceException;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Predicate;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -182,6 +185,7 @@ public class Essentials extends JavaPlugin implements net.ess3.api.IEssentials {
     private transient RandomTeleport randomTeleport;
     private transient UpdateChecker updateChecker;
     private transient AdventureFacet adventureFacet;
+    private transient EssentialsScheduler essentialsScheduler;
 
     static {
         EconomyLayers.init();
@@ -211,6 +215,7 @@ public class Essentials extends JavaPlugin implements net.ess3.api.IEssentials {
             }
             LOGGER = EssentialsLogger.getLoggerProvider(this);
             EssentialsLogger.updatePluginLogger(this);
+            essentialsScheduler = new EssentialsScheduler(this);
 
             initAdventureFacet();
 
@@ -1158,25 +1163,38 @@ public class Essentials extends JavaPlugin implements net.ess3.api.IEssentials {
             return 0;
         }
 
-        IText broadcast = new SimpleTextInput(message);
-
         final Collection<Player> players = getOnlinePlayers();
-        for (final Player player : players) {
-            final User user = getUser(player);
-            if (permission == null && (sender == null || !user.isIgnoredPlayer(sender)) || permission != null && user.isAuthorized(permission)) {
-                if (shouldExclude != null && shouldExclude.test(user)) {
-                    continue;
-                }
-                if (keywords) {
-                    broadcast = new KeywordReplacer(broadcast, new CommandSource(this, player), this, false);
-                }
-                for (final String messageText : broadcast.getLines()) {
-                    user.sendMessage(messageText);
-                }
+        if (isRegionizedScheduler()) {
+            for (final Player player : players) {
+                scheduleSyncDelayedTaskForEntity(player, () -> sendBroadcastMessage(player, sender, permission, message, keywords, shouldExclude));
             }
+            return players.size();
+        }
+
+        for (final Player player : players) {
+            sendBroadcastMessage(player, sender, permission, message, keywords, shouldExclude);
         }
 
         return players.size();
+    }
+
+    private void sendBroadcastMessage(final Player player, final IUser sender, final String permission, final String message, final boolean keywords, final Predicate<IUser> shouldExclude) {
+        final User user = getUser(player);
+        if (permission == null && sender != null && user.isIgnoredPlayer(sender) || permission != null && !user.isAuthorized(permission)) {
+            return;
+        }
+
+        if (shouldExclude != null && shouldExclude.test(user)) {
+            return;
+        }
+
+        IText broadcast = new SimpleTextInput(message);
+        if (keywords) {
+            broadcast = new KeywordReplacer(broadcast, new CommandSource(this, player), this, false);
+        }
+        for (final String messageText : broadcast.getLines()) {
+            user.sendMessage(messageText);
+        }
     }
 
     @Override
@@ -1205,54 +1223,112 @@ public class Essentials extends JavaPlugin implements net.ess3.api.IEssentials {
             return;
         }
 
-        for (final User user : getOnlineUsers()) {
-            if (sender != null && user.isIgnoredPlayer(sender)) {
-                continue;
+        if (isRegionizedScheduler()) {
+            for (final User user : getOnlineUsers()) {
+                scheduleSyncDelayedTaskForEntity(user.getBase(), () -> sendBroadcastTl(user, sender, shouldExclude, parseKeywords, tlKey, args));
             }
-
-            if (shouldExclude != null && shouldExclude.test(user)) {
-                continue;
-            }
-
-            final Object[] processedArgs;
-            if (parseKeywords) {
-                processedArgs = I18n.mutateArgs(args, s -> new KeywordReplacer(new SimpleTextInput(s.toString()), new CommandSource(this, user.getBase()), this, false).getLines().get(0));
-            } else {
-                processedArgs = args;
-            }
-
-            user.sendTl(tlKey, processedArgs);
+            return;
         }
+
+        for (final User user : getOnlineUsers()) {
+            sendBroadcastTl(user, sender, shouldExclude, parseKeywords, tlKey, args);
+        }
+    }
+
+    private void sendBroadcastTl(final User user, final IUser sender, final Predicate<IUser> shouldExclude, final boolean parseKeywords, final String tlKey, final Object... args) {
+        if (sender != null && user.isIgnoredPlayer(sender)) {
+            return;
+        }
+
+        if (shouldExclude != null && shouldExclude.test(user)) {
+            return;
+        }
+
+        final Object[] processedArgs;
+        if (parseKeywords) {
+            processedArgs = I18n.mutateArgs(args, s -> new KeywordReplacer(new SimpleTextInput(s.toString()), new CommandSource(this, user.getBase()), this, false).getLines().get(0));
+        } else {
+            processedArgs = args;
+        }
+
+        user.sendTl(tlKey, processedArgs);
     }
 
     @Override
     public BukkitTask runTaskAsynchronously(final Runnable run) {
-        return this.getScheduler().runTaskAsynchronously(this, run);
+        return getEssentialsScheduler().runTaskAsynchronously(run);
     }
 
     @Override
     public BukkitTask runTaskLaterAsynchronously(final Runnable run, final long delay) {
-        return this.getScheduler().runTaskLaterAsynchronously(this, run, delay);
+        return getEssentialsScheduler().runTaskLaterAsynchronously(run, delay);
     }
 
     @Override
     public BukkitTask runTaskTimerAsynchronously(final Runnable run, final long delay, final long period) {
-        return this.getScheduler().runTaskTimerAsynchronously(this, run, delay, period);
+        return getEssentialsScheduler().runTaskTimerAsynchronously(run, delay, period);
     }
 
     @Override
     public int scheduleSyncDelayedTask(final Runnable run) {
-        return this.getScheduler().scheduleSyncDelayedTask(this, run);
+        return getEssentialsScheduler().scheduleGlobal(run);
     }
 
     @Override
     public int scheduleSyncDelayedTask(final Runnable run, final long delay) {
-        return this.getScheduler().scheduleSyncDelayedTask(this, run, delay);
+        return getEssentialsScheduler().scheduleGlobal(run, delay);
     }
 
     @Override
     public int scheduleSyncRepeatingTask(final Runnable run, final long delay, final long period) {
-        return this.getScheduler().scheduleSyncRepeatingTask(this, run, delay, period);
+        return getEssentialsScheduler().scheduleGlobalRepeating(run, delay, period);
+    }
+
+    @Override
+    public int scheduleSyncDelayedTaskForEntity(final Entity entity, final Runnable run) {
+        return getEssentialsScheduler().scheduleEntity(entity, run);
+    }
+
+    @Override
+    public int scheduleSyncDelayedTaskForEntity(final Entity entity, final Runnable run, final long delay) {
+        return getEssentialsScheduler().scheduleEntity(entity, run, delay);
+    }
+
+    @Override
+    public int scheduleSyncRepeatingTaskForEntity(final Entity entity, final Runnable run, final long delay, final long period) {
+        return getEssentialsScheduler().scheduleEntityRepeating(entity, run, delay, period);
+    }
+
+    @Override
+    public int scheduleSyncDelayedTaskForLocation(final Location location, final Runnable run) {
+        return getEssentialsScheduler().scheduleLocation(location, run);
+    }
+
+    @Override
+    public int scheduleSyncDelayedTaskForLocation(final Location location, final Runnable run, final long delay) {
+        return getEssentialsScheduler().scheduleLocation(location, run, delay);
+    }
+
+    @Override
+    public void cancelTask(final int taskId) {
+        getEssentialsScheduler().cancelTask(taskId);
+    }
+
+    @Override
+    public boolean isRegionizedScheduler() {
+        return getEssentialsScheduler().isRegionizedScheduler();
+    }
+
+    @Override
+    public CompletableFuture<Location> getBedSpawnLocationAsync(final Player player, final boolean load) {
+        return getEssentialsScheduler().getBedSpawnLocationAsync(player, load);
+    }
+
+    private EssentialsScheduler getEssentialsScheduler() {
+        if (essentialsScheduler == null) {
+            essentialsScheduler = new EssentialsScheduler(this);
+        }
+        return essentialsScheduler;
     }
 
     @Override

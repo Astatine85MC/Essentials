@@ -292,7 +292,7 @@ public class JDADiscordService implements DiscordService, IEssentialsModule {
         if (Bukkit.getServer().isPrimaryThread()) {
             Bukkit.getPluginManager().callEvent(event);
         } else {
-            Bukkit.getScheduler().runTask(plugin, () -> Bukkit.getPluginManager().callEvent(event));
+            plugin.getEss().scheduleSyncDelayedTask(() -> Bukkit.getPluginManager().callEvent(event));
         }
     }
 

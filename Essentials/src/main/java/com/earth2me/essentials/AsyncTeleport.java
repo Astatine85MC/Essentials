@@ -12,6 +12,7 @@ import net.ess3.api.events.UserWarpEvent;
 import net.ess3.api.events.teleport.PreTeleportEvent;
 import net.ess3.api.events.teleport.TeleportWarmupEvent;
 import org.bukkit.Bukkit;
+import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.bukkit.event.player.PlayerRespawnEvent;
@@ -22,6 +23,7 @@ import java.util.Calendar;
 import java.util.GregorianCalendar;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.RejectedExecutionException;
 
 public class AsyncTeleport implements IAsyncTeleport {
     private final IUser teleportOwner;
@@ -134,27 +136,33 @@ public class AsyncTeleport implements IAsyncTeleport {
 
     @Override
     public void nowUnsafe(Location loc, TeleportCause cause, CompletableFuture<Boolean> future) {
-        final CompletableFuture<Boolean> paperFuture = PaperLib.teleportAsync(teleportOwner.getBase(), loc, cause);
-        paperFuture.thenAccept(future::complete);
-        paperFuture.exceptionally(future::completeExceptionally);
-    }
-
-    private void runOnMain(final Runnable runnable) throws ExecutionException, InterruptedException {
-        if (Bukkit.isPrimaryThread()) {
-            runnable.run();
-            return;
+        final Player player = teleportOwner.getBase();
+        if (ess.scheduleSyncDelayedTaskForEntity(player, () -> completeTeleport(PaperLib.teleportAsync(player, loc, cause), future), 0L) == -1) {
+            future.completeExceptionally(new RejectedExecutionException("Teleport owner rejected unsafe teleport"));
         }
-        final CompletableFuture<Object> taskLock = new CompletableFuture<>();
-        Bukkit.getScheduler().runTask(ess, () -> {
-            runnable.run();
-            taskLock.complete(new Object());
-        });
-        taskLock.get();
     }
 
     protected void nowAsync(final IUser teleportee, final ITarget target, final TeleportCause cause, final CompletableFuture<Boolean> future) {
         cancel(false);
 
+        if (target instanceof PlayerTarget && ess.isRegionizedScheduler()) {
+            final Player targetPlayer = ((PlayerTarget) target).getPlayer();
+            if (targetPlayer == null || !targetPlayer.isOnline()) {
+                future.complete(false);
+                return;
+            }
+            if (ess.scheduleSyncDelayedTaskForEntity(targetPlayer, () -> nowAsync(teleportee, new LocationTarget(targetPlayer.getLocation()), cause, future)) == -1) {
+                future.complete(false);
+            }
+            return;
+        }
+
+        if (ess.scheduleSyncDelayedTaskForEntity(teleportee.getBase(), () -> nowAsyncOnEntity(teleportee, target, cause, future)) == -1) {
+            future.complete(false);
+        }
+    }
+
+    private void nowAsyncOnEntity(final IUser teleportee, final ITarget target, final TeleportCause cause, final CompletableFuture<Boolean> future) {
         final PreTeleportEvent event = new PreTeleportEvent(teleportee, cause, target);
         Bukkit.getServer().getPluginManager().callEvent(event);
         if (event.isCancelled()) {
@@ -168,12 +176,7 @@ public class AsyncTeleport implements IAsyncTeleport {
                 return;
             }
 
-            try {
-                runOnMain(() -> teleportee.getBase().eject()); //EntityDismountEvent requires a sync context.
-            } catch (final ExecutionException | InterruptedException e) {
-                future.completeExceptionally(e);
-                return;
-            }
+            teleportee.getBase().eject();
         }
 
         if (teleportee.isAuthorized("essentials.back.onteleport")) {
@@ -181,44 +184,59 @@ public class AsyncTeleport implements IAsyncTeleport {
         }
 
         final Location targetLoc = target.getLocation();
+        final boolean ignoreUnsafeDestination = canIgnoreUnsafeDestination(teleportee, targetLoc);
+        final Player teleporteePlayer = teleportee.getBase();
         if (ess.getSettings().isTeleportSafetyEnabled() && !ess.getSettings().isForceDisableTeleportSafety() && LocationUtil.isBlockOutsideWorldBorder(targetLoc.getWorld(), targetLoc.getBlockX(), targetLoc.getBlockZ())) {
             targetLoc.setX(LocationUtil.getXInsideWorldBorder(targetLoc.getWorld(), targetLoc.getBlockX()));
             targetLoc.setZ(LocationUtil.getZInsideWorldBorder(targetLoc.getWorld(), targetLoc.getBlockZ()));
         }
         PaperLib.getChunkAtAsync(targetLoc.getWorld(), targetLoc.getBlockX() >> 4, targetLoc.getBlockZ() >> 4, true, true).thenAccept(chunk -> {
-            Location loc = targetLoc;
-            if (LocationUtil.isBlockUnsafeForUser(ess, teleportee, chunk.getWorld(), loc.getBlockX(), loc.getBlockY(), loc.getBlockZ())) {
-                if (ess.getSettings().isTeleportSafetyEnabled()) {
-                    if (ess.getSettings().isForceDisableTeleportSafety()) {
-                        //The chunk we're teleporting to is 100% going to be loaded here, no need to teleport async.
-                        teleportee.getBase().teleport(loc, cause);
-                    } else {
-                        try {
-                            //There's a chance the safer location is outside the loaded chunk so still teleport async here.
-                            PaperLib.teleportAsync(teleportee.getBase(), LocationUtil.getSafeDestination(ess, teleportee, loc), cause);
-                        } catch (final Exception e) {
-                            future.completeExceptionally(e);
-                            return;
-                        }
+            if (ess.scheduleSyncDelayedTaskForLocation(targetLoc, () -> completeAfterSafetyCheck(teleporteePlayer, targetLoc, cause, future, ignoreUnsafeDestination)) == -1) {
+                future.completeExceptionally(new RejectedExecutionException("Target region rejected teleport safety check"));
+            }
+        }).exceptionally(th -> {
+            future.completeExceptionally(th);
+            return null;
+        });
+    }
+
+    private boolean canIgnoreUnsafeDestination(final IUser teleportee, final Location targetLoc) {
+        final Player player = teleportee.getBase();
+        return player.isOnline()
+                && targetLoc.getWorld().equals(player.getWorld())
+                && (player.getGameMode() == GameMode.CREATIVE || player.getGameMode() == GameMode.SPECTATOR || teleportee.isGodModeEnabled())
+                && player.getAllowFlight();
+    }
+
+    private void completeAfterSafetyCheck(final Player teleporteePlayer, final Location targetLoc, final TeleportCause cause, final CompletableFuture<Boolean> future, final boolean ignoreUnsafeDestination) {
+        Location loc = targetLoc;
+        if (!ignoreUnsafeDestination && (LocationUtil.isBlockUnsafe(ess, loc.getWorld(), loc.getBlockX(), loc.getBlockY(), loc.getBlockZ()) || LocationUtil.isBlockOutsideWorldBorder(loc.getWorld(), loc.getBlockX(), loc.getBlockZ()))) {
+            if (ess.getSettings().isTeleportSafetyEnabled()) {
+                if (!ess.getSettings().isForceDisableTeleportSafety()) {
+                    try {
+                        loc = LocationUtil.getSafeDestination(ess, loc);
+                    } catch (final Exception e) {
+                        future.completeExceptionally(e);
+                        return;
                     }
-                } else {
-                    future.completeExceptionally(new TranslatableException("unsafeTeleportDestination", loc.getWorld().getName(), loc.getBlockX(), loc.getBlockY(), loc.getBlockZ()));
-                    return;
                 }
             } else {
-                if (ess.getSettings().isForceDisableTeleportSafety()) {
-                    //The chunk we're teleporting to is 100% going to be loaded here, no need to teleport async.
-                    teleportee.getBase().teleport(loc, cause);
-                } else {
-                    if (ess.getSettings().isTeleportToCenterLocation()) {
-                        loc = LocationUtil.getRoundedDestination(loc);
-                    }
-                    //There's a *small* chance the rounded destination produces a location outside the loaded chunk so still teleport async here.
-                    PaperLib.teleportAsync(teleportee.getBase(), loc, cause);
-                }
+                future.completeExceptionally(new TranslatableException("unsafeTeleportDestination", loc.getWorld().getName(), loc.getBlockX(), loc.getBlockY(), loc.getBlockZ()));
+                return;
             }
-            future.complete(true);
-        }).exceptionally(th -> {
+        } else if (!ess.getSettings().isForceDisableTeleportSafety() && ess.getSettings().isTeleportToCenterLocation()) {
+            loc = LocationUtil.getRoundedDestination(loc);
+        }
+
+        final Location teleportLocation = loc;
+        if (ess.scheduleSyncDelayedTaskForEntity(teleporteePlayer, () -> completeTeleport(PaperLib.teleportAsync(teleporteePlayer, teleportLocation, cause), future), 0L) == -1) {
+            future.completeExceptionally(new RejectedExecutionException("Teleport owner rejected teleport completion"));
+        }
+    }
+
+    private void completeTeleport(final CompletableFuture<Boolean> paperFuture, final CompletableFuture<Boolean> future) {
+        paperFuture.thenAccept(future::complete);
+        paperFuture.exceptionally(th -> {
             future.completeExceptionally(th);
             return null;
         });
@@ -394,7 +412,7 @@ public class AsyncTeleport implements IAsyncTeleport {
 
     void respawnNow(final IUser teleportee, final TeleportCause cause, final CompletableFuture<Boolean> future) {
         final Player player = teleportee.getBase();
-        PaperLib.getBedSpawnLocationAsync(player, true).thenAccept(location -> {
+        ess.getBedSpawnLocationAsync(player, true).thenAccept(location -> {
             if (location != null) {
                 nowAsync(teleportee, new LocationTarget(location), cause, future);
             } else {

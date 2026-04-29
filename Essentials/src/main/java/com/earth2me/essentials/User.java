@@ -860,8 +860,7 @@ public class User extends UserData implements Comparable<User>, IMessageRecipien
 
     public void updateActivityOnChat(final boolean broadcast) {
         if (ess.getSettings().cancelAfkOnChat()) {
-            //Chat happens async, make sure we have a sync context
-            ess.scheduleSyncDelayedTask(() -> updateActivity(broadcast, AfkStatusChangeEvent.Cause.CHAT));
+            ess.scheduleSyncDelayedTaskForEntity(getBase(), () -> updateActivity(broadcast, AfkStatusChangeEvent.Cause.CHAT));
         }
     }
 
@@ -885,10 +884,12 @@ public class User extends UserData implements Comparable<User>, IMessageRecipien
             if (ess.getSettings().getAfkTimeoutCommands().isEmpty()) {
                 this.getBase().kickPlayer(ess.getAdventureFacet().miniToLegacy(playerTl("autoAfkKickReason", kickTime)));
 
-                for (final User user : ess.getOnlineUsers()) {
-                    if (user.isAuthorized("essentials.kick.notify")) {
-                        user.sendTl("playerKicked", Console.displayName(), getName(), user.playerTl("autoAfkKickReason", kickTime));
-                    }
+                for (final User target : ess.getOnlineUsers()) {
+                    ess.scheduleSyncDelayedTaskForEntity(target.getBase(), () -> {
+                        if (target.isAuthorized("essentials.kick.notify")) {
+                            target.sendTl("playerKicked", Console.displayName(), getName(), target.playerTl("autoAfkKickReason", kickTime));
+                        }
+                    });
                 }
             } else {
                 // If `afk-timeout-commands` in config.yml is populated, execute the command(s) instead of kicking the player.
@@ -898,7 +899,7 @@ public class User extends UserData implements Comparable<User>, IMessageRecipien
                     }
                     // Replace placeholders in the command with actual values.
                     final String cmd = command.replace("{USERNAME}", getName()).replace("{KICKTIME}", String.valueOf(kickTime));
-                    ess.getServer().dispatchCommand(ess.getServer().getConsoleSender(), cmd);
+                    ess.scheduleSyncDelayedTask(() -> ess.getServer().dispatchCommand(ess.getServer().getConsoleSender(), cmd));
                 }
             }
         }

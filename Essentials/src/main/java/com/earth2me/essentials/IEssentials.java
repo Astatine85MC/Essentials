@@ -12,17 +12,20 @@ import com.earth2me.essentials.userstorage.IUserMap;
 import net.ess3.provider.Provider;
 import net.essentialsx.api.v2.services.BalanceTop;
 import net.essentialsx.api.v2.services.mail.MailService;
+import org.bukkit.Location;
 import org.bukkit.Server;
 import org.bukkit.World;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.PluginCommand;
+import org.bukkit.entity.Entity;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitScheduler;
 import org.bukkit.scheduler.BukkitTask;
 
 import java.util.Collection;
+import java.util.concurrent.CompletableFuture;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -107,6 +110,22 @@ public interface IEssentials extends Plugin {
     int scheduleSyncDelayedTask(Runnable run, long delay);
 
     int scheduleSyncRepeatingTask(Runnable run, long delay, long period);
+
+    int scheduleSyncDelayedTaskForEntity(Entity entity, Runnable run);
+
+    int scheduleSyncDelayedTaskForEntity(Entity entity, Runnable run, long delay);
+
+    int scheduleSyncRepeatingTaskForEntity(Entity entity, Runnable run, long delay, long period);
+
+    int scheduleSyncDelayedTaskForLocation(Location location, Runnable run);
+
+    int scheduleSyncDelayedTaskForLocation(Location location, Runnable run, long delay);
+
+    void cancelTask(int taskId);
+
+    boolean isRegionizedScheduler();
+
+    CompletableFuture<Location> getBedSpawnLocationAsync(Player player, boolean load);
 
     PermissionsHandler getPermissionsHandler();
 

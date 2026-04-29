@@ -7,6 +7,7 @@ import com.earth2me.essentials.User;
 import net.ess3.api.TranslatableException;
 import net.ess3.api.events.UserRandomTeleportEvent;
 import org.bukkit.Server;
+import org.bukkit.entity.Player;
 import org.bukkit.event.player.PlayerTeleportEvent;
 
 import java.util.Collections;
@@ -56,6 +57,8 @@ public class Commandtpr extends EssentialsCommand {
             return;
         }
 
+        final Player targetPlayer = target.getBase();
+
         target.sendTl("tprSuccess");
         if (target != user) {
             user.sendTl("tprOtherUser", target.getDisplayName());
@@ -63,13 +66,15 @@ public class Commandtpr extends EssentialsCommand {
 
         (event.isModified() ? randomTeleport.getRandomLocation(event.getCenter(), event.getMinRange(), event.getMaxRange()) : randomTeleport.getRandomLocation(randomLocationName))
                 .thenAccept(location -> {
-                    final CompletableFuture<Boolean> future = getNewExceptionFuture(user.getSource(), commandLabel);
-                    future.thenAccept(success -> {
-                        if (success) {
-                            target.sendTl("tprSuccessDone");
-                        }
+                    ess.scheduleSyncDelayedTaskForEntity(targetPlayer, () -> {
+                        final CompletableFuture<Boolean> future = getNewExceptionFuture(user.getSource(), commandLabel);
+                        future.thenAccept(success -> {
+                            if (success) {
+                                ess.scheduleSyncDelayedTaskForEntity(targetPlayer, () -> target.sendTl("tprSuccessDone"));
+                            }
+                        });
+                        target.getAsyncTeleport().teleport(location, charge, PlayerTeleportEvent.TeleportCause.COMMAND, future);
                     });
-                    target.getAsyncTeleport().teleport(location, charge, PlayerTeleportEvent.TeleportCause.COMMAND, future);
                 });
         throw new NoChargeException();
     }
@@ -94,17 +99,21 @@ public class Commandtpr extends EssentialsCommand {
             return;
         }
 
+        final Player playerToTeleport = userToTeleport.getBase();
+
         userToTeleport.sendTl("tprSuccess");
         sender.sendTl("tprOtherUser", userToTeleport.getDisplayName());
         (event.isModified() ? randomTeleport.getRandomLocation(event.getCenter(), event.getMinRange(), event.getMaxRange()) : randomTeleport.getRandomLocation(potentialLocation))
                 .thenAccept(location -> {
-                    final CompletableFuture<Boolean> future = getNewExceptionFuture(sender, commandLabel);
-                    future.thenAccept(success -> {
-                        if (success) {
-                            userToTeleport.sendTl("tprSuccessDone");
-                        }
+                    ess.scheduleSyncDelayedTaskForEntity(playerToTeleport, () -> {
+                        final CompletableFuture<Boolean> future = getNewExceptionFuture(sender, commandLabel);
+                        future.thenAccept(success -> {
+                            if (success) {
+                                ess.scheduleSyncDelayedTaskForEntity(playerToTeleport, () -> userToTeleport.sendTl("tprSuccessDone"));
+                            }
+                        });
+                        userToTeleport.getAsyncTeleport().now(location, false, PlayerTeleportEvent.TeleportCause.COMMAND, future);
                     });
-                    userToTeleport.getAsyncTeleport().now(location, false, PlayerTeleportEvent.TeleportCause.COMMAND, future);
                 });
     }
 

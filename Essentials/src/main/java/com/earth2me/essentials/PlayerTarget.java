@@ -15,6 +15,11 @@ public class PlayerTarget implements ITarget {
 
     @Override
     public Location getLocation() {
-        return Bukkit.getPlayer(uuid).getLocation();
+        final Player player = getPlayer();
+        return player == null ? null : player.getLocation();
+    }
+
+    Player getPlayer() {
+        return Bukkit.getPlayer(uuid);
     }
 }

@@ -5,7 +5,6 @@ import com.earth2me.essentials.utils.VersionUtil;
 import net.ess3.provider.providers.BukkitSenderProvider;
 import net.ess3.provider.providers.PaperCommandSender;
 import net.essentialsx.discord.JDADiscordService;
-import org.bukkit.Bukkit;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.scheduler.BukkitTask;
@@ -23,7 +22,7 @@ public class DiscordCommandSender {
         };
         this.sender = getCustomSender(sender, hook);
 
-        task = Bukkit.getScheduler().runTaskTimerAsynchronously(jda.getPlugin(), () -> {
+        task = jda.getPlugin().getEss().runTaskTimerAsynchronously(() -> {
             if (!responseBuffer.isEmpty() && System.currentTimeMillis() - lastTime >= 1000) {
                 callback.onMessage(responseBuffer);
                 responseBuffer = "";

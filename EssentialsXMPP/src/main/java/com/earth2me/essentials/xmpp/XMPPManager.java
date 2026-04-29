@@ -328,7 +328,7 @@ public class XMPPManager extends Handler implements MessageListener, ChatManager
 
     private void sendCommand(final Chat chat, final String message) {
         if (config.getList("op-users", String.class).contains(StringUtils.parseBareAddress(chat.getParticipant()))) {
-            parent.getServer().getScheduler().runTask(parent, () -> {
+            parent.getEss().scheduleSyncDelayedTask(() -> {
                 try {
                     parent.getServer().dispatchCommand(Console.getInstance().getCommandSender(), message.substring(1));
                 } catch (final Exception ex) {

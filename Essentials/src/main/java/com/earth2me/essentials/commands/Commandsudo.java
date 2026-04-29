@@ -36,7 +36,8 @@ public class Commandsudo extends EssentialsLoopCommand {
         }
 
         if (args[0].toLowerCase(Locale.ENGLISH).startsWith("c:")) {
-            user.getBase().chat(getFinalArg(args, 0).substring(2));
+            final String message = getFinalArg(args, 0).substring(2);
+            ess.scheduleSyncDelayedTaskForEntity(user.getBase(), () -> user.getBase().chat(message));
             return;
         }
 
@@ -53,7 +54,7 @@ public class Commandsudo extends EssentialsLoopCommand {
                 }
             }
 
-            ess.scheduleSyncDelayedTask(new SudoCommandTask());
+            ess.scheduleSyncDelayedTaskForEntity(user.getBase(), new SudoCommandTask());
         }
     }
 }
